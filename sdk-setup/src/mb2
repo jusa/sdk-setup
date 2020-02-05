@@ -3768,6 +3768,8 @@ fi
 
 # spec rules are complex:
 #  a .spec is required for some but not all operations
+#  if no -s is given and rpm directory is not found in current directory,
+#    look up parent directories up to root for rpm dir.
 #  if -s is given then
 #    if it does not exist then specify tries to make it
 #    if it exists it will be used
@@ -3775,6 +3777,19 @@ fi
 #  if there is a rpm/*.yaml then a spec is made and used
 
 if [[ $OPT_NEEDSPEC && ! $OPT_SPEC ]]; then
+    if [ ! -d "rpm" ]; then
+        build_pwd="$PWD"
+        while [ "$PWD" != "/" ]; do
+            if [ -d "rpm" ]; then
+                build_pwd="$PWD"
+                OPT_PKGDIR="$build_pwd/rpm"
+                break
+            fi
+            cd ..
+        done
+        cd "$build_pwd"
+    fi
+
     # set nullglob on so that the shell glob expansions will return
     # empty if files are not found
     shopt -s nullglob
