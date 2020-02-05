@@ -685,6 +685,11 @@ GLOBAL OPTIONS
         packages, read the passphrase from the <file>. Only the first line will
         be read.
 
+    -b, --fix-build
+        Run build only for make part. Try to modify spec before building
+        so that in %build phase only make is run, instead of all preceding
+        configure etc.
+
     --hooks-dir <dir>
         The directory where to look for hooks. See HOOKS below.
 
@@ -1357,6 +1362,52 @@ maybe_fix_package_version() {
 
     echo "Setting version: ${version}"
     sed -i "s,^Version:.*,Version: ${version}," "$spec_file"
+}
+
+maybe_modify_build_target() {
+    [[ $OPT_MODIFY_BUILD -eq 0 ]] && return
+
+    local specfile="$1"
+    local tempfile="/tmp/$(basename $specfile).modify_build_target_tmp"
+    local search_make=
+    local make_directive=
+
+    search_make="$(grep -e '^make' "$specfile")"
+    if [ -n "$search_make" ]; then
+        make_directive='^make'
+    fi
+
+    if [ -z "$search_make" ]; then
+        search_make="$(grep -e '^%make_build' "$specfile")"
+        if [ -n "$search_make" ]; then
+            make_directive='^%make_build'
+        fi
+    fi
+
+    if [ -z "$make_directive" ]; then
+        echo "No make directive found from spec."
+        return
+    fi
+
+    local build_line="$(grep -n -e '^%build' $specfile | cut -d: -f1)"
+    local make_line="$(tail -n +$build_line $specfile | grep -n -e "$make_directive" | head -n 1 | cut -d: -f1)"
+
+    if [ "$make_line" -eq 2 ]; then
+        # make is already right after %build
+        return
+    fi
+
+    local before_build=$(($build_line - 1))
+    local after_build=$(($build_line + 1))
+    local before_make=$(($make_line - 2))
+    local after_make=$(($build_line + $make_line - 1))
+
+    head -n $before_build "$specfile" > "$tempfile"
+    tail -n +$after_build "$specfile" | head -n $before_make >> "$tempfile"
+    head -n +$build_line "$specfile" | tail -n 1 >> "$tempfile"
+    tail -n +$after_make "$specfile" >> "$tempfile"
+
+    mv "$tempfile" "$specfile"
 }
 
 maybe_set_task_name_from_git_branch_name() {
@@ -2335,6 +2386,7 @@ run_build() {
     sed -i "s/\x0D$//g" "$TMP_SPEC"
 
     maybe_fix_package_version "$TMP_SPEC"
+    maybe_modify_build_target "$TMP_SPEC"
 
     local build_tgt=$(sb2 -t $OPT_TARGET gcc -dumpmachine)
     build_tgt=${build_tgt%-gnueabi}
@@ -2389,6 +2441,7 @@ run_prepare() {
     sed -i "s/\x0D$//g" "$TMP_SPEC"
 
     maybe_fix_package_version "$TMP_SPEC"
+    maybe_modify_build_target "$TMP_SPEC"
 
     local build_tgt=$(sb2 -t $OPT_TARGET gcc -dumpmachine)
     build_tgt=${build_tgt%-gnueabi}
@@ -2566,6 +2619,7 @@ run_compiledb() {
 
     # This is a good time to verify the target dependencies as per mb
     maybe_verify_target_dependencies
+    maybe_modify_build_target "$TMP_SPEC"
 
     local build_tgt=$(sb2 -t $OPT_TARGET gcc -dumpmachine)
     build_tgt=${build_tgt%-gnueabi}
@@ -2609,6 +2663,7 @@ run_make() {
     sed -i "s/\x0D$//g" "$TMP_SPEC"
 
     maybe_fix_package_version "$TMP_SPEC"
+    maybe_modify_build_target "$TMP_SPEC"
 
     local build_tgt=$(sb2 -t $OPT_TARGET gcc -dumpmachine)
     build_tgt=${build_tgt%-gnueabi}
@@ -3300,6 +3355,7 @@ OPT_GIT_CHANGE_LOG_ARGS=
 OPT_SHARED_DIR=/etc/mersdk/share
 OPT_INC_BUILD_NUMBER=0
 OPT_PULL_BUILD_REQUIRES=1
+OPT_MODIFY_BUILD=0
 OPT_WRAP=()
 OPT_CHECK_LEVELS=
 OPT_PACKAGE_SIGN_USER=
@@ -3534,6 +3590,9 @@ while [[ "$1" ]]; do
                 notice "The '$1' option is deprecated. Use '--no-pull-build-requires|-n' instead."
             fi
             OPT_PULL_BUILD_REQUIRES=
+            ;;
+        "-b" | "--fix-build") shift
+            OPT_MODIFY_BUILD=1
             ;;
         "-c" | "--git-change-log" ) shift
             OPT_GIT_CHANGE_LOG=1
